@@ -3521,7 +3521,9 @@ struct Device final : Counted<IDirect3DDevice9Ex> {
     }
     void publish_pick()
     {
-        if (g_pick_x < 0) return;
+        /* the pick is made in the left eye's (or a flat) frame: a request that arrives after that eye was
+           drawn waits through the right eye's frame instead of being answered "nothing" there */
+        if (g_pick_x < 0 || g_bo1_render_eye == 1) return;
         g_pick_u = pick_u;
         g_pick_v = pick_v;
         g_pick_valid = pick_found;
