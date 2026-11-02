@@ -1,0 +1,7 @@
+build/
+src/
+__pycache__/
+*.apk
+*.ff
+*.iwd
+*.keystore

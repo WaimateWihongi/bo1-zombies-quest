@@ -1,0 +1,29 @@
+# Host functions the guest calls: "guest_name" or "guest_name host_name".
+# port/tools/gen_imports.py makes the guest's trampolines and the host's lookup table.
+# Arguments pass in registers unchanged; see port/include/bo1_abi.h for the rules.
+__guest_syscall host_syscall
+__guest_get_tp host_get_tp
+host_set_tp
+host_thread_create
+host_log
+host_abort
+host_gl_begin
+host_gl_present
+host_gl_frame_begin
+host_xr_views
+host_xr_set_eye
+host_xr_panel_begin
+host_xr_panel_end
+host_xr_pointer_mode
+host_audio_open
+host_audio_write
+host_audio_queued
+host_wma_decode
+host_gl_stream_write
+host_gl_stream_create
+host_gl_has_multiview
+host_gl_multiview_attach
+host_gl_stream_fence
+host_gl_stream_wait
+host_input_poll
+host_input_gamepad

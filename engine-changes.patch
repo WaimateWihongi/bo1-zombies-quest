@@ -1,0 +1,1523 @@
+diff --git a/src/bgame/bg_weapons.cpp b/src/bgame/bg_weapons.cpp
+index a0f416c..16993dd 100644
+--- a/src/bgame/bg_weapons.cpp
++++ b/src/bgame/bg_weapons.cpp
+@@ -468,6 +468,19 @@ void __cdecl BG_GetSpreadForWeapon(
+         *minSpread *= decay;
+         *maxSpread *= decay;
+     }
++#ifdef BO1_GUEST
++    // the port (Quest): in VR the gun is aimed with the hand, so hip fire is as tight as aiming down the
++    // sight, with a little of the hip bloom from sustained fire (quest_vr.cpp). Shotguns keep their spread.
++    {
++        extern bool g_bo1_vr_controls;
++        if ( g_bo1_vr_controls && weapDef->weapClass != WEAPCLASS_SPREAD && ps->spreadOverrideState != 2 )
++        {
++            float bloom = (*maxSpread - *minSpread) * 0.35f;
++            *minSpread = weapDef->fAdsSpread;
++            *maxSpread = weapDef->fAdsSpread + (bloom > 0.0f ? bloom : 0.0f);
++        }
++    }
++#endif
+     if ( ps->spreadOverrideState == 1 )
+         *maxSpread = (float)ps->spreadOverride;
+     if ( (ps->perks[0] & 4) != 0 )
+diff --git a/src/cgame/cg_draw_reticles.cpp b/src/cgame/cg_draw_reticles.cpp
+index 4fce9a7..afbbfe7 100644
+--- a/src/cgame/cg_draw_reticles.cpp
++++ b/src/cgame/cg_draw_reticles.cpp
+@@ -1,4 +1,9 @@
+ #include "cg_draw_reticles.h"
++#ifdef BO1_GUEST
++// the port (Quest): in VR the crosshair is drawn in each eye where it sees the shots' target (quest_vr.cpp)
++bool bo1_vr_crosshair(const struct refdef_s *refdef, int passEntityNum, float *x, float *y);
++void __cdecl R_AddCmdSetCustomConstant(unsigned int type, const float *vec);
++#endif
+ #include <universal/com_math_anglevectors.h>
+ #include <bgame/bg_weapons_def.h>
+ #include <cgame_mp/cg_main_mp.h>
+@@ -293,8 +298,25 @@ void __cdecl CG_DrawCrosshair(int localClientNum)
+                                                 v1 = centerW;
+                                             centerW = v1;
+                                         }
++#ifdef BO1_GUEST
++                                        bool bo1Crosshair3d = bo1_vr_crosshair(&cgameGlob->refdef, cgameGlob->nextSnap->ps.clientNum, &centerX, &centerY);
++                                        if ( bo1Crosshair3d )
++                                        {
++                                            extern float g_bo1_crosshair_eye1[2]; // multiview: the right eye's offset
++                                            const float into_eye[4] = {1.0f, g_bo1_crosshair_eye1[0], g_bo1_crosshair_eye1[1], 0.0f};
++                                            R_AddCmdSetCustomConstant(0xB01u, into_eye); // rb_backend.cpp: the next draws go to the eye
++                                            transScale *= 0.6f; // a screen's crosshair is big across a headset's view
++                                        }
++#endif
+                                         CG_DrawReticleCenter(localClientNum, weapDef, color, centerX, centerY, centerW, transScale);
+                                         CG_DrawReticleSides(localClientNum, weapIndex, color, centerX, centerY, centerW, transScale);
++#ifdef BO1_GUEST
++                                        if ( bo1Crosshair3d )
++                                        {
++                                            const float back_to_panel[4] = {0.0f, 0.0f, 0.0f, 0.0f};
++                                            R_AddCmdSetCustomConstant(0xB01u, back_to_panel);
++                                        }
++#endif
+                                         //if ( g_DXDeviceThread == GetCurrentThreadId() )
+                                             //D3DPERF_EndEvent();
+                                         return;
+diff --git a/src/cgame/cg_weapons.cpp b/src/cgame/cg_weapons.cpp
+index 26131b9..cfccb8b 100644
+--- a/src/cgame/cg_weapons.cpp
++++ b/src/cgame/cg_weapons.cpp
+@@ -2392,6 +2392,13 @@ void __cdecl CG_AddPlayerWeapon(
+             cgameGlob->viewModelAxis[3][0] = placement->base.origin[0];
+             v15[1] = placement->base.origin[1];
+             v15[2] = placement->base.origin[2];
++#ifdef BO1_GUEST
++            {
++                // the port (Quest): in VR the gun is held in the right hand (quest_vr.cpp)
++                extern bool bo1_vr_hand_weapon(const refdef_s *refdef, float axis[4][3]);
++                bo1_vr_hand_weapon(&cgameGlob->refdef, cgameGlob->viewModelAxis);
++            }
++#endif
+             if ( !weapDef
+                 && !Assert_MyHandler("C:\\projects_pc\\cod\\codsrc\\src\\cgame\\cg_weapons.cpp", 3882, 0, "%s", "weapDef") )
+             {
+@@ -2400,6 +2407,14 @@ void __cdecl CG_AddPlayerWeapon(
+             if ( weapDef->weapClass == WEAPCLASS_GAS && bViewModel )
+                 CG_Flame_Update_ViewModel(localClientNum, cent);
+             CG_UpdateViewModelPose(viewModelInfo->viewModelDObj, localClientNum);
++#ifdef BO1_GUEST
++            {
++                // the port (Quest): in VR the left hand follows the left controller (quest_vr.cpp)
++                extern void bo1_vr_left_hand(DObj *obj, const cpose_t *pose, const float model[4][3], const refdef_s *refdef);
++                bo1_vr_left_hand(viewModelInfo->viewModelDObj, &cgameGlob->viewModelPose, cgameGlob->viewModelAxis,
++                                 &cgameGlob->refdef);
++            }
++#endif
+             CG_UpdateViewModelMinigun(cgameGlob, viewModelInfo->viewModelDObj, weapDef, cent);
+             CG_UpdateViewModelStackCounter(cgameGlob, ps, viewModelInfo->viewModelDObj, weapDef);
+             isInGuidedMissile = CG_IsInGuidedMissile(ps);
+@@ -3780,6 +3795,20 @@ void __cdecl CG_AddViewWeapon(int localClientNum)
+             else
+             {
+                 BG_CalculateWeaponMovement(&ws, placement.base.origin, angles);
++#ifdef BO1_GUEST
++                // the port (Quest): in VR the gun is held by the hand (quest_vr.cpp), so it stays still in it:
++                // none of the screen gun's bob, sway or move to the sight, only the recoil's kick
++                {
++                    extern bool g_bo1_vr_controls;
++                    if ( g_bo1_vr_controls )
++                    {
++                        placement.base.origin[0] = placement.base.origin[1] = placement.base.origin[2] = 0.0f;
++                        angles[0] = cgameGlob->kickAngles[0];
++                        angles[1] = cgameGlob->kickAngles[1];
++                        angles[2] = cgameGlob->kickAngles[2];
++                    }
++                }
++#endif
+                 localGunAngles[0] = angles[0];
+                 localGunAngles[1] = angles[1];
+                 localGunAngles[2] = angles[2];
+@@ -5251,6 +5280,19 @@ void __cdecl DrawBulletImpacts(
+         {
+             return;
+         }
++#ifdef BO1_GUEST
++        // the port (Quest): the shots' impacts from the hand, as the server fires them (g_weapon.cpp)
++        {
++            extern bool g_bo1_vr_controls, g_bo1_vr_muzzle_valid;
++            extern float g_bo1_vr_muzzle_offset[3];
++            if ( g_bo1_vr_controls && g_bo1_vr_muzzle_valid )
++            {
++                origin[0] += g_bo1_vr_muzzle_offset[0];
++                origin[1] += g_bo1_vr_muzzle_offset[1];
++                origin[2] += g_bo1_vr_muzzle_offset[2];
++            }
++        }
++#endif
+         viewang[0] = cgameGlob->gunPitch;
+         viewang[1] = cgameGlob->gunYaw;
+         viewang[2] = 0.0f;
+diff --git a/src/client/cl_gamepad.cpp b/src/client/cl_gamepad.cpp
+index 396ffdd..ecdb57a 100644
+--- a/src/client/cl_gamepad.cpp
++++ b/src/client/cl_gamepad.cpp
+@@ -900,6 +900,15 @@ void __cdecl CL_GamepadButtonEventForPort(
+     int localClientNum; // [esp+0h] [ebp-4h]
+ 
+     localClientNum = Com_ControllerIndex_GetLocalClientNum(portIndex);
++#ifdef BO1_GUEST
++    {
++        // the port (Quest), debugging: the first gamepad button events
++        static int logged;
++        if ( buttonEvent != 2 && logged++ < 80 )
++            Com_Printf(0, "gpad event: port %d key %d event %d local client %d catchers 0x%x\n", portIndex, key, buttonEvent,
++                       localClientNum, localClientNum >= 0 ? CL_GetLocalClientUIGlobals(localClientNum)->keyCatchers : -1);
++    }
++#endif
+     if ( localClientNum == -1
+         && !Assert_MyHandler(
+                     "C:\\projects_pc\\cod\\codsrc\\src\\client\\cl_gamepad.cpp",
+diff --git a/src/client_mp/cl_cgame_mp.cpp b/src/client_mp/cl_cgame_mp.cpp
+index e574836..1576454 100644
+--- a/src/client_mp/cl_cgame_mp.cpp
++++ b/src/client_mp/cl_cgame_mp.cpp
+@@ -734,6 +734,12 @@ void __cdecl CL_RenderScene(refdef_s *fd, int frameTime)
+ 
+ void __cdecl CL_RenderMissileCam(const refdef_s *fd, int frameTime)
+ {
++#ifdef BO1_GUEST
++    // the port (Quest): no extra camera views in VR (see RB_StandardDrawCommands)
++    int bo1_vr_eye();
++    if ( bo1_vr_eye() >= 0 )
++        return;
++#endif
+     Vec3Copy(fd->vieworg, cls.debugRenderPos);
+     Vec3Copy(fd->viewaxis[0], cls.debugRenderForward);
+ 
+diff --git a/src/client_mp/cl_input_mp.cpp b/src/client_mp/cl_input_mp.cpp
+index 494673b..22a2e03 100644
+--- a/src/client_mp/cl_input_mp.cpp
++++ b/src/client_mp/cl_input_mp.cpp
+@@ -607,6 +607,12 @@ usercmd_s *__cdecl CL_CreateCmd(usercmd_s *result, int localClientNum)
+         if ( GPad_IsActive(ControllerIndex) )
+             CL_GamepadMove(localClientNum, &cmd);
+         CL_RandomMove(&cmd);
++#ifdef BO1_GUEST
++        // the port (Quest): in VR the right controller aims and the right stick turns (quest_vr.cpp)
++        extern void bo1_vr_input(int localClientNum, float *viewangles, usercmd_s *cmd);
++        bo1_vr_input(localClientNum, LocalClientGlobals->viewangles, &cmd);
++        oldAngles = LocalClientGlobals->viewangles[0];
++#endif
+         if ( (float)(LocalClientGlobals->viewangles[0] - oldAngles) <= 90.0 )
+         {
+             if ( (float)(oldAngles - LocalClientGlobals->viewangles[0]) > 90.0 )
+diff --git a/src/client_mp/cl_main_pc_mp.cpp b/src/client_mp/cl_main_pc_mp.cpp
+index 21f38b4..2f91555 100644
+--- a/src/client_mp/cl_main_pc_mp.cpp
++++ b/src/client_mp/cl_main_pc_mp.cpp
+@@ -347,6 +347,9 @@ bool __cdecl CL_CDKeyValidate(netadr_t addr)
+     if (!g_steamInitialized)
+         return true;
+     return Steam_UpdateClientAuthTicket(addr);
++#elif defined(BO1_GUEST)
++    // no Steam on the Quest: connect without a ticket, as the no-steam path above does
++    return true;
+ #else
+ #error Steam Auth for Arch
+     return false;
+diff --git a/src/client_mp/cl_scrn_mp.cpp b/src/client_mp/cl_scrn_mp.cpp
+index f8d20cc..8bbcc7e 100644
+--- a/src/client_mp/cl_scrn_mp.cpp
++++ b/src/client_mp/cl_scrn_mp.cpp
+@@ -484,6 +484,31 @@ void    SCR_UpdateScreen()
+             {
+                 updateScreenCalled = 1;
+                 SND_Update();
++#ifdef BO1_GUEST
++                // the port (Quest): with a headset, the frame is drawn once per eye (quest_vr.cpp)
++                bool bo1_vr_begin_pair();
++                bool bo1_vr_multiview_pair();
++                void bo1_vr_set_eye(int eye);
++                if ( bo1_vr_begin_pair() )
++                {
++                    if ( bo1_vr_multiview_pair() )
++                    {
++                        // multiview: one frame draws both eyes (quest_multiview.cpp)
++                        bo1_vr_set_eye(2);
++                        SCR_UpdateFrame();
++                    }
++                    else
++                    {
++                        for ( int eye = 0; eye < 2; ++eye )
++                        {
++                            bo1_vr_set_eye(eye);
++                            SCR_UpdateFrame();
++                        }
++                    }
++                    bo1_vr_set_eye(-1);
++                }
++                else
++#endif
+                 SCR_UpdateFrame();
+                 updateScreenCalled = 0;
+             }
+@@ -532,8 +557,16 @@ void    SCR_UpdateFrame()
+         cgTime = 0;
+     timescale = Com_GetTimescaleForSnd();
+     IsMature = CG_IsMature();
++#ifdef BO1_GUEST
++    // the port (Quest): sound once per game frame, not once per eye
++    int bo1_vr_eye();
++    const bool bo1Sound = bo1_vr_eye() != 1;
++    if ( bo1Sound )
++#endif
++    {
+     SND_BeginFrame(IsMature, v5, timescale, cgTime, seed);
+     CG_SndUpdate();
++    }
+     CL_CompositeRender();
+     GlassCl_WaitUpdate();
+     refreshedUI = CL_CGameRendering(0);
+@@ -546,6 +579,9 @@ void    SCR_UpdateFrame()
+         R_StreamUpdate_Idle();
+     else
+         R_StreamUpdate_End();
++#ifdef BO1_GUEST
++    if ( bo1Sound )
++#endif
+     SND_EndFrame();
+     R_EndFrame();
+     R_IssueRenderCommands(3u);
+diff --git a/src/clientscript/cscr_debugger.h b/src/clientscript/cscr_debugger.h
+index db3e7d6..5acfdba 100644
+--- a/src/clientscript/cscr_debugger.h
++++ b/src/clientscript/cscr_debugger.h
+@@ -168,7 +168,7 @@ public:
+ class Scr_ScriptWindow : public UI_LinesComponent // sizeof=0x20
+ {
+ public:
+-    void *operator new(unsigned int size)
++    void *operator new(size_t size)
+     {
+         return Hunk_UserAlloc(g_DebugHunkUser, size, 4, "Scr_ScriptWindow");
+     }
+diff --git a/src/clientscript/cscr_evaluate.cpp b/src/clientscript/cscr_evaluate.cpp
+index 88725a0..358917e 100644
+--- a/src/clientscript/cscr_evaluate.cpp
++++ b/src/clientscript/cscr_evaluate.cpp
+@@ -16,7 +16,7 @@
+ scrEvaluateGlob_t gScrEvaluateGlob[2];
+ 
+ int g_script_error_level[2];
+-int g_script_error[2][33][16];
++jmp_buf g_script_error[2][33];
+ 
+ int __cdecl Scr_CompareCanonicalStrings(unsigned int *arg1, unsigned int *arg2)
+ {
+diff --git a/src/clientscript/cscr_evaluate.h b/src/clientscript/cscr_evaluate.h
+index c87cdcc..d82a223 100644
+--- a/src/clientscript/cscr_evaluate.h
++++ b/src/clientscript/cscr_evaluate.h
+@@ -1,4 +1,5 @@
+ #pragma once
++#include <setjmp.h>
+ #include "cscr_main.h"
+ #include "cscr_variable.h"
+ #include "cscr_debugger.h"
+@@ -151,4 +152,4 @@ void __cdecl Scr_FreeDebugExprValue(scriptInstance_t inst, sval_u val);
+ 
+ 
+ extern int g_script_error_level[2];
+-extern int g_script_error[2][33][16];
+\ No newline at end of file
++extern jmp_buf g_script_error[2][33];
+\ No newline at end of file
+diff --git a/src/game/g_weapon.cpp b/src/game/g_weapon.cpp
+index e7b0019..c955b10 100644
+--- a/src/game/g_weapon.cpp
++++ b/src/game/g_weapon.cpp
+@@ -1195,6 +1195,21 @@ void __cdecl G_CalcMuzzlePoints(const gentity_s *ent, weaponParms *wp, int shotC
+         {
+             G_GetPlayerViewOrigin(ps, wp->muzzleTrace);
+         }
++#ifdef BO1_GUEST
++        // the port (Quest): in VR the shots leave from the hand, not the eye, so they go where the gun
++        // points (quest_vr.cpp works out the hand's offset from the eye, and falls back to the eye when a
++        // wall is between them)
++        {
++            extern bool g_bo1_vr_controls, g_bo1_vr_muzzle_valid;
++            extern float g_bo1_vr_muzzle_offset[3];
++            if ( g_bo1_vr_controls && g_bo1_vr_muzzle_valid && ps->clientNum == 0 )
++            {
++                wp->muzzleTrace[0] += g_bo1_vr_muzzle_offset[0];
++                wp->muzzleTrace[1] += g_bo1_vr_muzzle_offset[1];
++                wp->muzzleTrace[2] += g_bo1_vr_muzzle_offset[2];
++            }
++        }
++#endif
+     }
+ }
+ 
+diff --git a/src/game_mp/g_scr_main_mp.h b/src/game_mp/g_scr_main_mp.h
+index 758d3b1..baa70fb 100644
+--- a/src/game_mp/g_scr_main_mp.h
++++ b/src/game_mp/g_scr_main_mp.h
+@@ -10,7 +10,7 @@
+ struct gentity_s;
+ struct scr_animscript_t;
+ struct pathnode_t;
+-enum objectiveState_t;
++enum objectiveState_t : __int32;
+ struct objective_t;
+ struct XAnimTree_s;
+ struct scr_animtree_t;
+diff --git a/src/game_sp/g_sp_save_actor.inl b/src/game_sp/g_sp_save_actor.inl
+index 38580fb..b6737c9 100644
+--- a/src/game_sp/g_sp_save_actor.inl
++++ b/src/game_sp/g_sp_save_actor.inl
+@@ -9,7 +9,7 @@
+ 
+ #define AF(member, type) { offsetof(actor_s, member), sizeof(((actor_s *)0)->member), type }
+ #define REACQUIRE(n) AF(pPotentialReacquireNode[n], 13)
+-#define KNOWN(n) AF(sentientInfo[n].pLastKnownNode, 13)
++#define KNOWN(n) AF(sentientInfo.inl[n].pLastKnownNode, 13) // inl[]: offsetof cannot go through operator[]
+ #define KNOWN8(n) KNOWN(n), KNOWN(n + 1), KNOWN(n + 2), KNOWN(n + 3), KNOWN(n + 4), KNOWN(n + 5), KNOWN(n + 6), KNOWN(n + 7)
+ static const SPEntitySaveField s_actorFields[] = {
+     // SP 0x00A53B58 order. SP +0xDC8 AnimScriptHandle (11), +0xDD4 AnimScriptSpecific.name,
+diff --git a/src/gfx_d3d/r_dpvs_sceneent.cpp b/src/gfx_d3d/r_dpvs_sceneent.cpp
+index 65ab1cf..8fb28fc 100644
+--- a/src/gfx_d3d/r_dpvs_sceneent.cpp
++++ b/src/gfx_d3d/r_dpvs_sceneent.cpp
+@@ -3,6 +3,10 @@
+ #include "r_dpvs_entity.h"
+ #include "r_scene.h"
+ 
++// this file's own static copy of R_CullSphereDpvs: MSVC gives it internal linkage despite the
++// extern declaration in r_dpvs.h, clang keeps it external (a duplicate of r_dpvs.cpp's)
++#define R_CullSphereDpvs R_CullSphereDpvs_SceneEnt
++
+ #if 0
+ void    R_AddCellSceneEntSurfacesInFrustumCmd(GfxWorldDpvsPlanes *data)
+ {
+diff --git a/src/gfx_d3d/r_dpvs_static.cpp b/src/gfx_d3d/r_dpvs_static.cpp
+index 096c88f..1003f75 100644
+--- a/src/gfx_d3d/r_dpvs_static.cpp
++++ b/src/gfx_d3d/r_dpvs_static.cpp
+@@ -1051,7 +1051,7 @@ int __cdecl R_AddCellStaticSurfacesInFrustum(DpvsStaticCellCmd *dpvsCell)
+     unsigned int bits; // [esp+10h] [ebp-15D4h]
+     unsigned int k; // [esp+14h] [ebp-15D0h]
+     int j; // [esp+18h] [ebp-15CCh]
+-    float alignas(16) planebuf[320][4];
++    alignas(16) float planebuf[320][4];
+     float (*occluderPlanes)[4]; // [esp+146Ch] [ebp-178h]
+     const GfxCell *cell; // [esp+1470h] [ebp-174h]
+     DpvsClipPlanes out; // [esp+1474h] [ebp-170h] BYREF
+diff --git a/src/gfx_d3d/r_model_skin.cpp b/src/gfx_d3d/r_model_skin.cpp
+index caa0fd4..9e5743a 100644
+--- a/src/gfx_d3d/r_model_skin.cpp
++++ b/src/gfx_d3d/r_model_skin.cpp
+@@ -470,7 +470,7 @@ void R_SkinXModelCmd(SkinXModelCmd *data)
+     GfxPackedVertexNormal *normalIn; // [esp-28CCh] [ebp-28D8h]
+     GfxPackedVertex *skinVerticesOut; // [esp-28C8h] [ebp-28D4h]
+     const XSurface *xsurf; // [esp-28C4h] [ebp-28D0h]
+-    DObjSkelMat alignas(16) boneSkelMats[DOBJ_MAX_PARTS]; // [esp-28C0h] [ebp-28CCh] BYREF
++    alignas(16) DObjSkelMat boneSkelMats[DOBJ_MAX_PARTS]; // [esp-28C0h] [ebp-28CCh] BYREF
+     int j; // [esp-30h] [ebp-3Ch]
+     GfxModelSkinnedSurface *skinnedSurf; // [esp-24h] [ebp-30h]
+     unsigned int i; // [esp-20h] [ebp-2Ch]
+diff --git a/src/gfx_d3d/r_model_skin_sse.cpp b/src/gfx_d3d/r_model_skin_sse.cpp
+index 9313e2e..97238b9 100644
+--- a/src/gfx_d3d/r_model_skin_sse.cpp
++++ b/src/gfx_d3d/r_model_skin_sse.cpp
+@@ -37,15 +37,15 @@
+ // ---------------------------------------------------------------------------
+ 
+ // blend weights are uint16 in [0, 65535]; 1/65536 normalizes them to [0, 1)
+-static const __m128 sse_weightScale = { { 1.0f / 65536.0f, 1.0f / 65536.0f, 1.0f / 65536.0f, 1.0f / 65536.0f } };
++static const __m128 sse_weightScale = { 1.0f / 65536.0f, 1.0f / 65536.0f, 1.0f / 65536.0f, 1.0f / 65536.0f };
+ 
+ // packed unit vectors decode as (packed - shift) / scale, encode as packed * scale + shift
+-static const __m128 sse_encodeShift = { { 127.0f, 127.0f, 127.0f, -192.0f } };
+-static const __m128 sse_encodeScale = { { 127.0f, 127.0f, 127.0f, 255.0f } };
++static const __m128 sse_encodeShift = { 127.0f, 127.0f, 127.0f, -192.0f };
++static const __m128 sse_encodeScale = { 127.0f, 127.0f, 127.0f, 255.0f };
+ 
+ // Black Ops binormal-sign normalization: keep xyz fully, keep only the sign bit of w, then OR in 1.0
+ static const __declspec(align(16)) unsigned int k_binormalSignMask[4] = { 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0x80000000u };
+-static const __m128 sse_wOne = { { 0.0f, 0.0f, 0.0f, 1.0f } };
++static const __m128 sse_wOne = { 0.0f, 0.0f, 0.0f, 1.0f };
+ 
+ // ---------------------------------------------------------------------------
+ // intrinsic helpers
+@@ -140,7 +140,7 @@ static __forceinline __m64 Sse_SkinVertex(const GfxPackedVertex *src, const uint
+ {
+     const __m128 *v = (const __m128 *)src;
+     __m128 position = LoadSkinPosition(v[0]);
+-    __m64 colorTexCoord = *(const __m64 *) & v[1].m128_u64[0];
++    __m64 colorTexCoord = *(const __m64 *)&v[1];
+ 
+     const DObjSkelMat *bone0 = BoneAt(boneMatrix, blend[0]);
+     __m128 pos0 = PackXyzW(TransformPoint(bone0, position), position);
+@@ -152,8 +152,8 @@ static __forceinline __m64 Sse_SkinVertex(const GfxPackedVertex *src, const uint
+         outPos = _mm_add_ps(outPos, _mm_mul_ps(DecodeWeight(blend[2 * w]), _mm_sub_ps(bonePos, pos0)));
+     }
+ 
+-    __m64 normalTangent = PackNormalTangent(SkinUnitVec(bone0, v[1].m128_u32[2]),
+-        SkinUnitVec(bone0, v[1].m128_u32[3]));
++    __m64 normalTangent = PackNormalTangent(SkinUnitVec(bone0, ((const uint32_t *)&v[1])[2]),
++        SkinUnitVec(bone0, ((const uint32_t *)&v[1])[3]));
+     _mm_stream_ps((float *)dst, outPos);
+     _mm_stream_pi(dst + 2, colorTexCoord);
+     _mm_stream_pi(dst + 3, normalTangent);
+@@ -169,7 +169,7 @@ static __forceinline void Sse_SkinVertexSimple(const GfxPackedVertex *src, const
+ {
+     const __m128 *v = (const __m128 *)src;
+     __m128 position = LoadSkinPosition(v[0]);
+-    __m64 colorTexCoord = *(const __m64 *) & v[1].m128_u64[0];
++    __m64 colorTexCoord = *(const __m64 *)&v[1];
+ 
+     const DObjSkelMat *bone0 = BoneAt(boneMatrix, blend[0]);
+     __m128 pos0 = PackXyzW(TransformPoint(bone0, position), position);
+@@ -192,11 +192,11 @@ static __forceinline __m64 Sse_SkinVertexRigid(const DObjSkelMat *bone, const Gf
+ {
+     const __m128 *v = (const __m128 *)src;
+     __m128 srcPos = v[0];
+-    __m64 colorTexCoord = *(const __m64 *) & v[1].m128_u64[0];
++    __m64 colorTexCoord = *(const __m64 *)&v[1];
+ 
+     __m128 outPos = PackXyzW(TransformPoint(bone, srcPos), srcPos);
+-    __m64 normalTangent = PackNormalTangent(SkinUnitVec(bone, v[1].m128_u32[2]),
+-        SkinUnitVec(bone, v[1].m128_u32[3]));
++    __m64 normalTangent = PackNormalTangent(SkinUnitVec(bone, ((const uint32_t *)&v[1])[2]),
++        SkinUnitVec(bone, ((const uint32_t *)&v[1])[3]));
+     _mm_stream_ps((float *)dst, outPos);
+     _mm_stream_pi(dst + 2, colorTexCoord);
+     _mm_stream_pi(dst + 3, normalTangent);
+@@ -208,7 +208,7 @@ static __forceinline void Sse_SkinVertexRigidSimple(const DObjSkelMat *bone, con
+ {
+     const __m128 *v = (const __m128 *)src;
+     __m128 srcPos = v[0];
+-    __m64 colorTexCoord = *(const __m64 *) & v[1].m128_u64[0];
++    __m64 colorTexCoord = *(const __m64 *)&v[1];
+ 
+     __m128 outPos = PackXyzW(TransformPoint(bone, srcPos), srcPos);
+     _mm_stream_ps((float *)dst, outPos);
+diff --git a/src/gfx_d3d/r_rendercmds.cpp b/src/gfx_d3d/r_rendercmds.cpp
+index 94506cc..8ea266e 100644
+--- a/src/gfx_d3d/r_rendercmds.cpp
++++ b/src/gfx_d3d/r_rendercmds.cpp
+@@ -2223,6 +2223,11 @@ void __cdecl R_EndFrame()
+ {
+     if ( rg.registered )
+     {
++#ifdef BO1_GUEST
++        // the port (Quest): which eye this frame is, and its poses, go with its back-end data (quest_vr.cpp)
++        void bo1_vr_record_frame(int index);
++        bo1_vr_record_frame((int)(frontEndDataOut - s_backEndData));
++#endif
+         CL_UpdateDebugClientData();
+         CL_FlushDebugClientData();
+         R_TransferDebugGlobals(&frontEndDataOut->debugGlobals);
+diff --git a/src/gfx_d3d/r_rendertarget.cpp b/src/gfx_d3d/r_rendertarget.cpp
+index 5ccbe35..fa67f22 100644
+--- a/src/gfx_d3d/r_rendertarget.cpp
++++ b/src/gfx_d3d/r_rendertarget.cpp
+@@ -10,6 +10,11 @@
+ 
+ ExtraCamSettings g_extraCamSettings;
+ 
++#ifdef BO1_GUEST
++extern "C" void bo1_d3d9_stereo_surface(IDirect3DSurface9 *surface); // d3d9_gles.cpp (multiview)
++extern "C" void bo1_d3d9_stereo_texture(IDirect3DBaseTexture9 *texture);
++#endif
++
+ const char *s_renderTargetNames[44] =
+ {
+   "R_RENDERTARGET_NULL",
+@@ -239,6 +244,35 @@ void R_InitRenderTargets_PC()
+         R_UI3D_CheckRenderTarget();
+         R_CheckExtraCamTargets();
+     }
++#ifdef BO1_GUEST
++    // the port (Quest): multiview - the targets each eye draws its own picture into become two-layer
++    // texture arrays, one layer an eye (d3d9_gles.cpp); shadow maps, the in-world screens, the CPU
++    // read-back targets and the composite (drawn once, outside the eyes' passes, and read by nearly
++    // every material) stay single (quest_multiview.cpp)
++    {
++        bool bo1_vr_multiview_storage();
++        if ( bo1_vr_multiview_storage() )
++        {
++            static const GfxRenderTargetId stereo[] = {
++                R_RENDERTARGET_SAVED_SCREEN, R_RENDERTARGET_FRAME_BUFFER, R_RENDERTARGET_SCENE,
++                R_RENDERTARGET_SCENE_NULLCOLOR, R_RENDERTARGET_RESOLVED_POST_SUN, R_RENDERTARGET_RESOLVED_SCENE,
++                R_RENDERTARGET_FLOAT_Z, R_RENDERTARGET_PINGPONG_0, R_RENDERTARGET_PINGPONG_1,
++                R_RENDERTARGET_POST_EFFECT_SRC, R_RENDERTARGET_POST_EFFECT_GODRAYS, R_RENDERTARGET_POST_EFFECT_0,
++                R_RENDERTARGET_POST_EFFECT_1, R_RENDERTARGET_SEETHRU_DECAL,
++                R_RENDERTARGET_BLOOM_MIP1, R_RENDERTARGET_BLOOM_MIP2, R_RENDERTARGET_BLOOM_MIP3,
++                R_RENDERTARGET_BLOOM_MIP3_PING, R_RENDERTARGET_BLOOM_MIP3_PONG, R_RENDERTARGET_BLOOM_STREAK,
++            };
++            for ( GfxRenderTargetId id : stereo )
++            {
++                bo1_d3d9_stereo_surface(gfxRenderTargets[id].surface.color);
++                bo1_d3d9_stereo_surface(gfxRenderTargets[id].surface.depthStencil);
++                // and the texture behind it (the INTZ depth copy has only that, no surfaces)
++                if ( gfxRenderTargets[id].image )
++                    bo1_d3d9_stereo_texture(gfxRenderTargets[id].image->texture.basemap);
++            }
++        }
++    }
++#endif
+ }
+ 
+ void __cdecl R_ShareRenderTarget(GfxRenderTargetId idFrom, GfxRenderTargetId idTo)
+diff --git a/src/gfx_d3d/r_scene.cpp b/src/gfx_d3d/r_scene.cpp
+index a185a13..fe1be74 100644
+--- a/src/gfx_d3d/r_scene.cpp
++++ b/src/gfx_d3d/r_scene.cpp
+@@ -3015,6 +3015,11 @@ void __cdecl R_SetViewParmsForScene(const refdef_s *refdef, GfxViewParms *viewPa
+     viewParms->zNear = v2;
+     R_SetupProjection(refdef->tanHalfFovX, refdef->tanHalfFovY, viewParms);
+     R_SetupViewProjectionMatrices(viewParms, 1);
++#ifdef BO1_GUEST
++    // the port (Quest): in a stereo frame, the current eye's view and frustum (quest_vr.cpp)
++    bool bo1_vr_view(const refdef_s *refdef, GfxViewParms *view);
++    bo1_vr_view(refdef, viewParms);
++#endif
+ }
+ 
+ void __cdecl R_SetupProjection(float tanHalfFovX, float tanHalfFovY, GfxViewParms *viewParms)
+@@ -3284,6 +3289,14 @@ void __cdecl R_RenderScene(refdef_s *refdef, int frameTime)
+             v2 = &lockPvsViewParms;
+         else
+             v2 = viewParms;
++#ifdef BO1_GUEST
++        // the port (Quest): multiview - cull for both eyes, draw for the left (quest_vr.cpp)
++        {
++            const GfxViewParms *bo1_vr_dpvs_view();
++            if ( !r_lockPvs->current.enabled && bo1_vr_dpvs_view() )
++                v2 = (GfxViewParms *)bo1_vr_dpvs_view();
++        }
++#endif
+         frontEndDataOut->hideMatureContent = refdef->hideMatureContent;
+         frontEndDataOut->splitscreen = refdef->splitscreen;
+         frontEndDataOut->extraCamLargeFrameSize = 1;
+diff --git a/src/gfx_d3d/r_shade.cpp b/src/gfx_d3d/r_shade.cpp
+index d11778c..ff65660 100644
+--- a/src/gfx_d3d/r_shade.cpp
++++ b/src/gfx_d3d/r_shade.cpp
+@@ -7,6 +7,14 @@
+ #include <universal/profile.h>
+ 
+ bool Use_R_SetVertexShaderConstantFromCode_New = true;
++#ifdef BO1_GUEST
++// the port (Quest): multiview - the right eye's copy of each eye-dependent code constant (quest_multiview.cpp)
++void bo1_mv_vertex_code_constant(GfxCmdBufContext context, const MaterialShaderArgument *arg);
++void bo1_mv_pixel_code_constant(GfxCmdBufContext context, const MaterialShaderArgument *arg);
++#define BO1_MV_VERTEX(context, arg) bo1_mv_vertex_code_constant(context, arg)
++#else
++#define BO1_MV_VERTEX(context, arg)
++#endif
+ 
+ 
+ void __cdecl R_SetupPassPerPrimArgs(GfxCmdBufContext context)
+@@ -60,6 +68,7 @@ void __cdecl R_SetVertexShaderConstantFromCode_Old(GfxCmdBufContext context, con
+         if ( r_logFile && r_logFile->current.integer )
+             RB_LogPrint("device->SetVertexShaderConstantF( dest, data, rowCount )\n");
+         hr = device->SetVertexShaderConstantF(dest, v5, rowCount);
++        BO1_MV_VERTEX(context, routingData);
+         if ( hr < 0 )
+         {
+             ++g_disableRendering;
+@@ -215,6 +224,7 @@ void __cdecl R_SetVertexShaderConstantFromCode_New(
+                 RB_LogPrint("device->SetVertexShaderConstantF( dest, data, rowCount )\n");
+ 
+             v11 = device->SetVertexShaderConstantF(dest, data, rowCount);
++            BO1_MV_VERTEX(context, routingData);
+             if (v11 < 0)
+             {
+                 ++g_disableRendering;
+@@ -267,6 +277,7 @@ void __cdecl R_SetVertexShaderConstantFromCode_New(
+             if (r_logFile && r_logFile->current.integer)
+                 RB_LogPrint("device->SetVertexShaderConstantF( dest, data, rowCount )\n");
+             hr = context.state->prim.device->SetVertexShaderConstantF(dest, data, rowCount);
++            BO1_MV_VERTEX(context, routingData);
+             if (hr < 0)
+             {
+                 ++g_disableRendering;
+@@ -481,6 +492,9 @@ void __cdecl R_SetPixelShaderConstantFromCode(const GfxCmdBufContext context, co
+         routingData->dest,
+         R_GetCodeConstant(context, routingData->u.codeConst.index),
+         routingData->u.codeConst.rowCount);
++#ifdef BO1_GUEST
++    bo1_mv_pixel_code_constant(context, routingData);
++#endif
+ }
+ 
+ void __cdecl R_SetupPassCriticalPixelShaderArgs(GfxCmdBufContext context)
+diff --git a/src/gfx_d3d/r_state_utils.cpp b/src/gfx_d3d/r_state_utils.cpp
+index 0cd6340..a6b258d 100644
+--- a/src/gfx_d3d/r_state_utils.cpp
++++ b/src/gfx_d3d/r_state_utils.cpp
+@@ -454,6 +454,11 @@ void __cdecl R_BeginView(GfxCmdBufSourceState *source, const GfxSceneDef *sceneD
+     source->wetness = 0.0f;
+     R_SetGameTime(source, source->sceneDef.floatTime);
+     R_DeriveNearPlaneConstantsForView(source);
++#ifdef BO1_GUEST
++    // the port (Quest): multiview - the right eye's view constants, for the main scene's view (quest_multiview.cpp)
++    void bo1_mv_begin_view(GfxCmdBufSourceState *source);
++    bo1_mv_begin_view(source);
++#endif
+ }
+ 
+ void __cdecl R_DeriveNearPlaneConstantsForView(GfxCmdBufSourceState *source)
+diff --git a/src/gfx_d3d/rb_backend.cpp b/src/gfx_d3d/rb_backend.cpp
+index ca4f4e0..642eb35 100644
+--- a/src/gfx_d3d/rb_backend.cpp
++++ b/src/gfx_d3d/rb_backend.cpp
+@@ -2329,6 +2329,9 @@ void __cdecl R_SetVertex4dWithNormal(
+     vert->texCoord[1] = t;
+ }
+ 
++#ifdef BO1_GUEST
++extern "C" void bo1_d3d9_ui_pause(int paused); // d3d9_gles.cpp
++#endif
+ void __cdecl RB_SetCustomConstantCmd(GfxRenderCommandExecState *execState)
+ {
+   const GfxCmdSetCustomConstant *cmd; // [esp+8h] [ebp-4h]
+@@ -2336,6 +2339,18 @@ void __cdecl RB_SetCustomConstantCmd(GfxRenderCommandExecState *execState)
+   cmd = (const GfxCmdSetCustomConstant *)execState->cmd;
+   if ( tess.indexCount )
+     RB_EndTessSurface();
++#ifdef BO1_GUEST
++  // the port (Quest): the crosshair's marker (cg_draw_reticles.cpp) - its draws go into the eye, not the panel
++  if ( (unsigned int)cmd->type == 0xB01u )
++  {
++    bo1_d3d9_ui_pause(cmd->vec[0] != 0.0f);
++    // multiview: the right eye's offset for those draws (quest_multiview.cpp)
++    void bo1_mv_set_2d_offset(bool on, float dx, float dy);
++    bo1_mv_set_2d_offset(cmd->vec[0] != 0.0f, cmd->vec[1], cmd->vec[2]);
++    execState->cmd = (char *)execState->cmd + *(unsigned __int16 *)execState->cmd;
++    return;
++  }
++#endif
+   R_SetCodeConstantFromVec4(&gfxCmdBufSourceState, cmd->type, (float*)cmd->vec);
+   execState->cmd = (char *)execState->cmd + *(unsigned __int16 *)execState->cmd;
+ }
+@@ -4592,6 +4607,14 @@ void __cdecl RB_BeginFrame(GfxBackEndData *data)
+     int rt; // [esp+8h] [ebp-4h]
+ 
+     backEndData = data;
++#ifdef BO1_GUEST
++    {
++        // the port (Quest): the eye this frame was built for, before it is drawn and presented (quest_vr.cpp)
++        extern GfxBackEndData s_backEndData[2];
++        void bo1_vr_backend_frame(int index);
++        bo1_vr_backend_frame((int)(data - s_backEndData));
++    }
++#endif
+     if ((data->drawType & 1) != 0)
+     {
+         if (!rg.renderHiResShot)
+@@ -5789,7 +5812,7 @@ void __cdecl RB_UpdateDynamicBuffers(GfxBackEndData *backendData)
+     *backendData->dynamicBufferCurrentFrame = 0;
+ }
+ 
+-const void *data;
++static const void *data;
+ void     RB_RenderThread(unsigned int threadContext)
+ {
+     void *Value; // eax
+@@ -5845,7 +5868,14 @@ void     RB_RenderThread(unsigned int threadContext)
+         // zombies: the loop as SP's render thread (SP 0x006EBE62..0x006EBFC5): the backend event is polled (SP 0x006EBE8E
+         // Sys_WaitBackendEvent(0)), the remote screen update is the last else-if branch, and an idle pass sleeps 1 ms
+         // (SP 0x006EBFBB). KB waited 1 ms on the event, slept 0 ms when idle and checked the remote update after every branch.
++#ifdef BO1_GUEST
++        // the port (Quest): block on the event (woken the moment the front end hands a frame over) rather than poll
++        // and sleep a whole millisecond - with two eye frames per game frame that sleep cost ~0.6 ms of every frame
++        const bool bo1GotFrame = Sys_WaitBackendEvent(1u);
++        if ( bo1GotFrame )
++#else
+         if ( Sys_WaitBackendEvent(0) )
++#endif
+         {
+             data = (GfxBackEndData *)Sys_RendererSleep();
+             if (data)
+@@ -5937,11 +5967,18 @@ void     RB_RenderThread(unsigned int threadContext)
+         }
+         else
+         {
+-            NET_Sleep(1u);
++#ifndef BO1_GUEST
++            NET_Sleep(1u); // the port waited up to 1 ms on the backend event already
++#endif
+         }
+     }
+ }
+ 
++#ifdef BO1_GUEST
++extern int g_bo1_render_eye;                 // quest_vr.cpp
++extern "C" void bo1_d3d9_ui(int on);         // d3d9_gles.cpp: 1 sends the 2D to the headset's panel
++extern "C" void bo1_d3d9_ui_pause(int paused); // d3d9_gles.cpp: 1 sends the 2D to the eye for a while (the crosshair)
++#endif
+ void __cdecl RB_RenderCommandFrame(const GfxBackEndData *data)
+ {
+     char *Name; // [esp+18h] [ebp-28h]
+@@ -5967,7 +6004,15 @@ void __cdecl RB_RenderCommandFrame(const GfxBackEndData *data)
+         RB_DrawComposites();
+         RB_Draw3D();
+         drawType = backEndData->drawType;
++#ifdef BO1_GUEST
++        // the port (Quest): in stereo the 2D (menus, HUD) goes to a panel floating in the world, not into each eye
++        if ( g_bo1_render_eye >= 0 )
++            bo1_d3d9_ui(1);
++        RB_CallExecuteRenderCommands();
++        bo1_d3d9_ui(0);
++#else
+         RB_CallExecuteRenderCommands();
++#endif
+         rb_execCmdsMS = Sys_Milliseconds() - renderStartMS;
+         backEndData = 0;
+     }
+diff --git a/src/gfx_d3d/rb_corona.cpp b/src/gfx_d3d/rb_corona.cpp
+index e6e1c71..e106b6f 100644
+--- a/src/gfx_d3d/rb_corona.cpp
++++ b/src/gfx_d3d/rb_corona.cpp
+@@ -9,8 +9,21 @@
+ CoronaState coronaState[4];
+ int coronaTimeLastUpdated;
+ 
++#ifdef BO1_GUEST
++// the port (Quest): multiview - what's drawn here is placed in the left eye's clip space on the CPU; the right
++// eye re-projects it (quest_multiview.cpp)
++void bo1_mv_reproject(bool on);
++struct Bo1Reproject {
++    Bo1Reproject() { bo1_mv_reproject(true); }
++    ~Bo1Reproject() { bo1_mv_reproject(false); }
++};
++#define BO1_REPROJECT Bo1Reproject bo1Reproject
++#else
++#define BO1_REPROJECT
++#endif
+ void __cdecl RB_DrawCoronas(unsigned int localClientNum)
+ {
++    BO1_REPROJECT;
+     const Material *coronaMaterial; // [esp+0h] [ebp-54h]
+     Corona *v3; // [esp+18h] [ebp-3Ch]
+     int m; // [esp+1Ch] [ebp-38h]
+diff --git a/src/gfx_d3d/rb_draw3d.cpp b/src/gfx_d3d/rb_draw3d.cpp
+index 9e4fac7..fbe4227 100644
+--- a/src/gfx_d3d/rb_draw3d.cpp
++++ b/src/gfx_d3d/rb_draw3d.cpp
+@@ -742,17 +742,34 @@ void __cdecl RB_StandardDrawCommands(GfxViewInfo *viewInfo)
+ 
+   data = backEndData;
+   isMissileCam = viewInfo->isMissileCamera;
++#ifdef BO1_GUEST
++  {
++    // the port (Quest): in VR an extra camera's view (the front end's monitor feeds, a missile camera) isn't drawn - it
++    // costs a whole second scene per eye (quest_vr.cpp)
++    extern int g_bo1_render_eye;
++    if ( isMissileCam && g_bo1_render_eye >= 0 )
++      return;
++  }
++#endif
+   floatzRenderTarget = isMissileCam ? R_RENDERTARGET_FLOAT_Z_MISSILE_CAM : R_RENDERTARGET_FLOAT_Z;
+   resolveDistortion = 1;
+   drawReflected = !isMissileCam;
+   drawWaypoints = drawReflected;
+   applyPostFX = drawReflected;
+-  if ( !isMissileCam )
++#ifdef BO1_GUEST
++  // the port (Quest): the right eye's frame reuses what the left eye's drew a moment before - the shadow maps and the
++  // in-world screens' UI texture don't depend on the eye (quest_vr.cpp)
++  extern int g_bo1_render_eye;
++  const bool bo1SecondEye = g_bo1_render_eye == 1;
++#else
++  const bool bo1SecondEye = false;
++#endif
++  if ( !isMissileCam && !bo1SecondEye )
+     RB_UI3D_RenderToTexture(viewInfo->cmds, &viewInfo->rbUI3D, &viewInfo->input);
+   dynamicShadowType = viewInfo->dynamicShadowType;
+   isRenderingFullScreen = viewInfo->isRenderingFullScreen;
+   oldSceneViewport = viewInfo->sceneViewport;
+-  if ( dynamicShadowType == SHADOW_MAP )
++  if ( dynamicShadowType == SHADOW_MAP && !bo1SecondEye )
+   {
+     if ( Com_BitCheckAssert(data->shadowableLightHasShadowMap, rgp.world->sunPrimaryLightIndex, 32) )
+       RB_SunShadowMaps(data, viewInfo);
+diff --git a/src/gfx_d3d/rb_postfx.cpp b/src/gfx_d3d/rb_postfx.cpp
+index b8a2055..0d97353 100644
+--- a/src/gfx_d3d/rb_postfx.cpp
++++ b/src/gfx_d3d/rb_postfx.cpp
+@@ -4,6 +4,9 @@
+ #include "r_state.h"
+ #include "rb_draw3d.h"
+ #include "rb_backend.h"
++#ifdef BO1_GUEST
++extern "C" void bo1_d3d9_split_post(void); // d3d9_gles.cpp (multiview)
++#endif
+ 
+ bool __cdecl RB_UsingDepthOfFieldFX(const GfxViewInfo *viewInfo)
+ {
+@@ -2533,6 +2536,25 @@ void __cdecl RB_ProcessPostEffects(const GfxViewInfo *viewInfo)
+   {
+     __debugbreak();
+   }
++#ifdef BO1_GUEST
++  // the port (Quest): multiview - the post-processing chain (bloom, the final tonemap) isn't drawn in a
++  // frame that draws both eyes at once: it came out dark in the left eye and black in the right, and the
++  // scene before it is right (d3d9_gles.cpp, quest_multiview.cpp). Test with bo1_vr_mv_post 1.
++  {
++      extern bool g_bo1_mv_frame;
++      static const dvar_s *bo1_vr_mv_post;
++      if ( !bo1_vr_mv_post )
++          bo1_vr_mv_post = _Dvar_RegisterBool("bo1_vr_mv_post", 0, 0, "VR multiview: draw the post-processing (testing)");
++      if ( g_bo1_mv_frame && !bo1_vr_mv_post->current.enabled )
++      {
++          // the scene's copy is still made: effects read it (muzzle and grenade flashes, glass) - without
++          // it they were black, and showed a stale picture through
++          RB_GetResolvedScene();
++          return;
++      }
++  }
++  bo1_d3d9_split_post();
++#endif
+   RB_GetResolvedScene();
+   RB_BloomLDR(viewInfo);
+   if ( RB_UsingPostEffects(viewInfo) )
+diff --git a/src/gfx_d3d/rb_resource.cpp b/src/gfx_d3d/rb_resource.cpp
+index 8192691..1474cb5 100644
+--- a/src/gfx_d3d/rb_resource.cpp
++++ b/src/gfx_d3d/rb_resource.cpp
+@@ -109,7 +109,7 @@ void __cdecl RB_Resource_Callback(void (__cdecl *callback)())
+         __debugbreak();
+     }
+     action->action = ACTION_CALLBACK;
+-    action->resource = callback;
++    action->resource = (void *)callback;
+     RB_Resource_Unlock();
+ }
+ 
+@@ -125,7 +125,7 @@ void __cdecl RB_Resource_CallbackParam(void (__cdecl *callback)(void *), void *d
+         __debugbreak();
+     }
+     action->action = ACTION_CALLBACKPARAM;
+-    action->resource = callback;
++    action->resource = (void *)callback;
+     action->data = data;
+     RB_Resource_Unlock();
+ }
+diff --git a/src/gfx_d3d/rb_sky.cpp b/src/gfx_d3d/rb_sky.cpp
+index 06d9992..cc95e81 100644
+--- a/src/gfx_d3d/rb_sky.cpp
++++ b/src/gfx_d3d/rb_sky.cpp
+@@ -142,6 +142,18 @@ unsigned int __cdecl RB_CalcSunSpriteSamples()
+   return sampleCount;
+ }
+ 
++#ifdef BO1_GUEST
++// the port (Quest): multiview - what's drawn here is placed in the left eye's clip space on the CPU; the right
++// eye re-projects it (quest_multiview.cpp)
++void bo1_mv_reproject(bool on);
++struct Bo1Reproject {
++    Bo1Reproject() { bo1_mv_reproject(true); }
++    ~Bo1Reproject() { bo1_mv_reproject(false); }
++};
++#define BO1_REPROJECT Bo1Reproject bo1Reproject
++#else
++#define BO1_REPROJECT
++#endif
+ void __cdecl RB_DrawSun(unsigned int localClientNum)
+ {
+     SunFlareDynamic *sunFlare; // [esp+18h] [ebp-8h]
+@@ -173,6 +185,7 @@ void __cdecl RB_DrawSun(unsigned int localClientNum)
+         return;
+     }
+     sunFlare = &sunFlareArray[localClientNum];
++    BO1_REPROJECT;
+     RB_SetIdentity();
+     RB_DrawSunQuerySprite(sunFlare);
+     RB_AddSunEffects(sunFlare);
+@@ -475,6 +488,7 @@ void __cdecl RB_AddSunEffects(SunFlareDynamic *sunFlare)
+ 
+ void __cdecl RB_DrawSunPostEffects(unsigned int localClientNum, float sunVisibilityAdjust)
+ {
++    BO1_REPROJECT;
+     int frameTime; // [esp+18h] [ebp-Ch]
+     SunFlareDynamic *sunFlare; // [esp+1Ch] [ebp-8h]
+ 
+diff --git a/src/monkey/monkey_comm.cpp b/src/monkey/monkey_comm.cpp
+index 93a262c..0bf7c20 100644
+--- a/src/monkey/monkey_comm.cpp
++++ b/src/monkey/monkey_comm.cpp
+@@ -53,7 +53,7 @@ char __cdecl Monkey_InitCommunication(const char *server)
+             memset(&zookeeper.sin_port, 0, 14);
+             zookeeper.sin_family = 2;
+             zookeeper.sin_port = htons(7000);
+-            zookeeper.sin_addr.S_un.S_addr = addr;
++            zookeeper.sin_addr.s_addr = addr;
+             if ( connect(g_MonkeySock, (const struct sockaddr *)&zookeeper, 16) )
+             {
+                 err = WSAGetLastError();
+@@ -173,6 +173,18 @@ bool __cdecl Monkey_SocketHasData()
+ 
+     if ( !g_MonkeyConnected )
+         return 0;
++#ifdef BO1_GUEST
++    FD_ZERO(&readfds);
++    FD_ZERO(&errorfds);
++    FD_SET(g_MonkeySock, &readfds);
++    FD_SET(g_MonkeySock, &errorfds);
++    timeout.tv_sec = 0;
++    timeout.tv_usec = 0;
++    avail = select(g_MonkeySock + 1, &readfds, 0, &errorfds, &timeout);
++    if ( avail == -1 || avail && FD_ISSET(g_MonkeySock, &errorfds) )
++        Monkey_DisconnectAndExit();
++    return avail && FD_ISSET(g_MonkeySock, &readfds);
++#else
+     errorfds.fd_count = 0;
+     readfds.fd_array[0] = g_MonkeySock;
+     readfds.fd_count = 1;
+@@ -189,5 +201,6 @@ bool __cdecl Monkey_SocketHasData()
+     if ( avail == -1 || avail && __WSAFDIsSet(g_MonkeySock, &errorfds) )
+         Monkey_DisconnectAndExit();
+     return avail && __WSAFDIsSet(g_MonkeySock, &readfds);
++#endif
+ }
+ 
+diff --git a/src/physics/phys_broad_phase.h b/src/physics/phys_broad_phase.h
+index cce8f57..b32acc2 100644
+--- a/src/physics/phys_broad_phase.h
++++ b/src/physics/phys_broad_phase.h
+@@ -43,6 +43,13 @@ struct __declspec(align(8)) broad_phase_base // sizeof=0x50
+     void *m_user_data;
+     unsigned int m_env_collision_flags;
+     unsigned int m_my_collision_type_flags;
++#ifdef BO1_GUEST
++    // the port: the 4 bytes of tail padding as a member. MSVC never puts a derived class's members in a base's
++    // tail padding, clang (Itanium layout) does for a non-POD base - broad_phase_info and broad_phase_group then
++    // began 4 bytes early, and the free lists' "&bpi[-1].m_gjk_geom" headers (MSVC offsets) pointed 4 bytes off:
++    // freeing a ragdoll's physics corrupted memory (the slot_pool assert after the first zombie death).
++    unsigned int m_bo1_tail_padding;
++#endif
+     // padding byte
+     // padding byte
+     // padding byte
+diff --git a/src/physics/phys_colgeom.h b/src/physics/phys_colgeom.h
+index 94dee41..623e781 100644
+--- a/src/physics/phys_colgeom.h
++++ b/src/physics/phys_colgeom.h
+@@ -492,7 +492,13 @@ struct __declspec(align(16)) gjk_partition_t : gjk_base_t // sizeof=0x70
+         virtual bool is_walkable(const phys_vec3 *hit_point, const phys_vec3 *up) override;
+         // get_brush() - gjk_base_t
+ };
++#ifdef BO1_GUEST
++// Itanium C++ ABI (the Quest guest) puts derived members in the base's tail padding; MSVC does
++// not. A runtime-only physics object, so only its size differs.
++static_assert(sizeof(gjk_partition_t) == 96);
++#else
+ static_assert(sizeof(gjk_partition_t) == 112);
++#endif
+ 
+ struct gjk_double_sphere_t : gjk_base_t // sizeof=0x90
+ {
+diff --git a/src/physics/phys_gjk.cpp b/src/physics/phys_gjk.cpp
+index 14345bc..d0aabd0 100644
+--- a/src/physics/phys_gjk.cpp
++++ b/src/physics/phys_gjk.cpp
+@@ -9,7 +9,7 @@
+ // (Honestly it should probably be turned on for the entire project)
+ // `mp_array`, I was having endless (endless, and not sometimes!) gjk warnings about max iterations. This seems to have fixed it.
+ // Could also be fixed with more iterations, but that's a hack.
+-#if !defined(_M_IX86_FP) || _M_IX86_FP != 0
++#if !defined(BO1_GUEST) && (!defined(_M_IX86_FP) || _M_IX86_FP != 0)
+ // to turn on x87: Edit the vcxproj 
+ // <ClCompile Include="src\physics\phys_gjk.cpp">
+ // <EnableEnhancedInstructionSet Condition = "'$(Platform)'=='Win32'" > NoExtensions< / EnableEnhancedInstructionSet>
+diff --git a/src/qcommon/msg.cpp b/src/qcommon/msg.cpp
+index 6bcf542..4442519 100644
+--- a/src/qcommon/msg.cpp
++++ b/src/qcommon/msg.cpp
+@@ -12,12 +12,17 @@ int __cdecl MSG_RoundFloatToInt(float value)
+ {
+     const double bias = 9.313225746154785e-10;
+     int result;
++#ifdef BO1_GUEST
++    // FISTP rounds with the FPU's default mode, round to nearest even, as lrint does
++    result = (int)lrint((double)value + bias);
++#else
+     __asm
+     {
+         fld value
+         fadd bias
+         fistp result
+     }
++#endif
+     return result;
+ }
+ 
+diff --git a/src/qcommon/threads.cpp b/src/qcommon/threads.cpp
+index af911b5..9381b71 100644
+--- a/src/qcommon/threads.cpp
++++ b/src/qcommon/threads.cpp
+@@ -270,12 +270,14 @@ void __cdecl SetThreadName(unsigned int dwThreadID, const char *szThreadName)
+     if ( dwThreadID == 0xFFFFFFFF || dwThreadID == GetCurrentThreadId() )
+         PROF_THREADNAME(szThreadName);
+ 
++#ifndef BO1_GUEST // the MSVC debugger's thread-naming exception; there is no SEH on the Quest
+     // this try/except needs to be here, otherwise it wont run without a debugger :D
+     __try {
+         RaiseException(0x406D1388, 0, sizeof(info) / sizeof(DWORD), (ULONG_PTR *)&info);
+     }
+     __except (EXCEPTION_EXECUTE_HANDLER) {
+     }
++#endif
+ }
+ 
+ DWORD WINAPI Sys_ThreadMain(LPVOID parameter)
+diff --git a/src/sound/snd_driver_xaudio2.h b/src/sound/snd_driver_xaudio2.h
+index d98ed6b..ddcce32 100644
+--- a/src/sound/snd_driver_xaudio2.h
++++ b/src/sound/snd_driver_xaudio2.h
+@@ -115,15 +115,23 @@ struct __declspec(align(128)) SoundState // sizeof=0x3EF600
+     IXAudio2MasteringVoice *masterVoice; // XREF: SD_Init(void)+6A/w
+     XAUDIO2_VOICE_DETAILS masterVoiceDetails; // XREF: SD_Init(void)+76/w
+     IXAudio2SubmixVoice *masterBus;     // XREF: iSND_CreateVoice+51F/r
++#ifndef BO1_GUEST // the XAudio2 effects: the Quest's audio backend has its own
+     SDXA2MasterBusEffect masterDsp;     // XREF: SND_InitMasterVoice+122/o
++#endif
+     snd_dsp_master_params masterParams; // XREF: SD_Init(void)+96/o
+     IXAudio2SubmixVoice *novoiceBus;    // XREF: iSND_CreateVoice:loc_93EF9C/r
++#ifndef BO1_GUEST
+     SDXA2MasterNoVoiceBusEffect novoiceDsp;
++#endif
+     snd_dsp_master_no_voice_params novoiceParams;
+     IXAudio2SubmixVoice *radverbBus;    // XREF: iSND_CreateVoice+548/r
++#ifndef BO1_GUEST
+     SDXA2RadverbEffect radverbDsp;      // XREF: SND_InitMasterVoice+17C/o
++#endif
+     snd_rv_params radverbParams;        // XREF: SD_Init(void)+E7/o
++#ifndef BO1_GUEST
+     SDXA2SourceEffect voiceDsp[148];    // XREF: SDXA2_VoiceDspAllocate(void)+2E/o
++#endif
+     IXAudio2SourceVoice *voices[SND_MAX_VOICES];    // XREF: SD_StopVoice(int)+9/r
+     VoiceInfo voiceInfos[SND_MAX_VOICES];           // XREF: iSND_CreateVoice+7D/o
+     StreamVoice streamVoices[SND_MAX_STREAM_VOICES];       // XREF: iSND_ReleaseStreamBuffer+64/o
+diff --git a/src/sound/snd_driver_xaudio2_dsp.h b/src/sound/snd_driver_xaudio2_dsp.h
+index 67786a0..8c0a1cc 100644
+--- a/src/sound/snd_driver_xaudio2_dsp.h
++++ b/src/sound/snd_driver_xaudio2_dsp.h
+@@ -1,15 +1,24 @@
+ #pragma once
+ 
++#ifndef BO1_GUEST // the XAudio2 driver: Windows only; the Quest has its own audio backend
+ #include <XAPOBase.h>
+ #include <XAudio2.h>
++#endif
+ #include <universal/assertive.h>
+ #include "snd_radverb.h"
+ 
+ #define SDXA2_MAX_FRAME_COUNT 480
+ 
++#ifdef BO1_GUEST
++struct SDXA2Effect;
++struct SDXA2SourceEffect;
++#endif
++#ifndef BO1_GUEST // the XAudio2 driver: Windows only; the Quest has its own audio backend
+ static const GUID HACK_IID_IXAPOParameters = { 0xA90BC001, 0xE897, 0xE897, { 0x55, 0xE4, 0x9E, 0x47, 0x00, 0x00, 0x00, 0x01 } };
++#endif
+ 
+ //struct SDXA2Effect : public CXAPOParametersBase  // sizeof=0x3C80
++#ifndef BO1_GUEST // the XAudio2 driver: Windows only; the Quest has its own audio backend
+ struct SDXA2Effect : public CXAPOBase, public IXAPOParameters // sizeof=0x3C80
+ {                                       // XREF: SDXA2MasterNoVoiceBusEffect/r
+     int locked;
+@@ -87,6 +96,7 @@ struct SDXA2Effect : public CXAPOBase, public IXAPOParameters // sizeof=0x3C80
+     
+     virtual void Process(unsigned int channelCount, unsigned int frameCount, float *data) = 0;
+ };
++#endif
+ 
+ struct snd_dsp_master_params // sizeof=0x60
+ {                                       // XREF: SDXA2MasterBusEffect/r
+@@ -186,6 +196,7 @@ struct snd_dsp_master_state // sizeof=0x1000
+     snd_dsp_dynamo_state limit;
+ };
+ 
++#ifndef BO1_GUEST // the XAudio2 driver: Windows only; the Quest has its own audio backend
+ struct SDXA2MasterBusEffect : SDXA2Effect // sizeof=0xBD00
+ {                                       // XREF: SoundState/r
+     snd_dsp_master_params params;
+@@ -199,7 +210,9 @@ struct SDXA2MasterBusEffect : SDXA2Effect // sizeof=0xBD00
+         float *data);
+     void STDMETHODCALLTYPE SetParameters(const void *pParams, unsigned int cbParams); 
+ };
++#endif
+ 
++#ifndef BO1_GUEST // the XAudio2 driver: Windows only; the Quest has its own audio backend
+ struct SDXA2RadverbEffect : SDXA2Effect // sizeof=0x87B80
+ {                                       // XREF: SoundState/r
+     snd_rv_state state;                 // XREF: .data:00E1F218/o
+@@ -217,6 +230,7 @@ struct SDXA2RadverbEffect : SDXA2Effect // sizeof=0x87B80
+ 
+     void STDMETHODCALLTYPE SetParameters(const void *pParams, unsigned int cbParams);
+ };
++#endif
+ 
+ struct snd_dsp_squelch_param // sizeof=0x8
+ {                                       // XREF: snd_dsp_futz_param/r
+@@ -255,6 +269,7 @@ struct snd_dsp_source_state // sizeof=0x4C
+     snd_dsp_futz_state futz;
+ };
+ 
++#ifndef BO1_GUEST // the XAudio2 driver: Windows only; the Quest has its own audio backend
+ struct SDXA2SourceEffect : public SDXA2Effect // sizeof=0x5B80
+ {                                       // XREF: SoundState/r
+     snd_dsp_source_params params;
+@@ -271,7 +286,9 @@ struct SDXA2SourceEffect : public SDXA2Effect // sizeof=0x5B80
+         float *data);
+     void STDMETHODCALLTYPE SetParameters(const void *pParams, unsigned int cbParams);
+ };
++#endif
+ 
++#ifndef BO1_GUEST // the XAudio2 driver: Windows only; the Quest has its own audio backend
+ struct SDXA2MasterNoVoiceBusEffect : SDXA2Effect // sizeof=0xB900
+ {                                       // XREF: SoundState/r
+     snd_dsp_master_no_voice_params params;
+@@ -285,6 +302,7 @@ struct SDXA2MasterNoVoiceBusEffect : SDXA2Effect // sizeof=0xB900
+         float *data);
+     void STDMETHODCALLTYPE SetParameters(const void *pParams, unsigned int cbParams);
+ };
++#endif
+ 
+ 
+ 
+diff --git a/src/ui/ui_main.cpp b/src/ui/ui_main.cpp
+index adad2fb..24427bf 100644
+--- a/src/ui/ui_main.cpp
++++ b/src/ui/ui_main.cpp
+@@ -125,7 +125,7 @@ const dvar_t *emblem_scroll_delay_first;
+ const dvar_t *emblem_scroll_delay_rest;
+ 
+ uiInfo_s uiInfoArray[1];
+-const serverFilter_s serverFilters[1];
++const serverFilter_s serverFilters[1] = {};
+ 
+ bool g_ingameMenusLoaded[1];
+ 
+@@ -864,6 +864,10 @@ bool __cdecl UI_ShouldDrawBuildNumber(int localClientNum)
+ {
+     connstate_t connectionState; // [esp+0h] [ebp-4h]
+ 
++#ifdef BO1_GUEST
++    // the port (Quest): no version string floating on the headset's panel
++    return false;
++#endif
+     connectionState = CL_GetLocalClientConnectionState(localClientNum);
+     return CL_AllLocalClientsDisconnected() && connectionState == CA_DISCONNECTED;
+ }
+diff --git a/src/ui/ui_shared.cpp b/src/ui/ui_shared.cpp
+index 420d9ac..1144e45 100644
+--- a/src/ui/ui_shared.cpp
++++ b/src/ui/ui_shared.cpp
+@@ -4607,6 +4607,16 @@ void __cdecl Menus_PrintAllLoadedMenus(UiContext *dc)
+     for ( i = 0; i < dc->menuCount; ++i )
+         Com_Printf(16, "%i. %s\n", i, dc->Menus[i]->window.name);
+     Com_Printf(16, "\n%i menus total\n", dc->menuCount);
++#ifdef BO1_GUEST
++    /* the port: also which menus are open, bottom to top (to see the UI without a screen) */
++    Com_Printf(16, "Open menus:\n");
++    for ( i = 0; i < dc->openMenuCount; ++i )
++        Com_Printf(16, "  %i. %s%s%s\n", i, dc->menuStack[i].menu->window.name,
++                   Window_IsVisible(dc->contextIndex, &dc->menuStack[i].menu->window) ? " visible" : "",
++                   Window_HasFocus(dc->contextIndex, &dc->menuStack[i].menu->window) ? " focus" : "");
++    void Sys_MenuDumpNow();
++    Sys_MenuDumpNow(); /* the menus named by bo1_menudump */
++#endif
+ }
+ 
+ int    Menu_CheckOnKey(int localClientNum, UiContext *dc, menuDef_t *menu, int key)
+@@ -7535,6 +7545,40 @@ int __cdecl Menu_HandleMouseMove(int localClientNum, UiContext *dc, menuDef_t *m
+     }
+ }
+ 
++#ifdef BO1_GUEST
++// the port (Quest): pointing at a 3D menu. Such a menu is drawn into a UI3D texture window that an in-world screen shows
++// (the front end's TV), so Menu_HandleMouseMove leaves it alone; the port finds where on that texture the player points
++// (tx, ty: texture pixels) and this focuses the item there, as a mouse over a flat menu would (its onFocus scripts move
++// the TV's highlight). The rects are placed with the window's own ScreenPlacement, the one the menu is drawn with.
++// 1 when it focused an item.
++int Menu_PointAt3D(int localClientNum, UiContext *dc, menuDef_t *menu, float tx, float ty)
++{
++    if ( !menu || menu->ui3dWindowId < 0 )
++        return 0;
++    const ScreenPlacement *scrPlace = R_UI3D_ScrPlaceFromTextureWindow(menu->ui3dWindowId);
++    for ( int i = menu->itemCount - 1; i >= 0; --i )
++    {
++        itemDef_s *item = menu->items[i];
++        if ( (Window_GetDynamicFlags(dc->contextIndex, &item->window) & 0x4004) == 0
++            || ((item->dvarFlags & 3) != 0 && !Item_EnableShowViaDvar(item, 1))
++            || ((item->dvarFlags & 0xC) != 0 && !Item_EnableShowViaDvar(item, 4))
++            || !Item_IsVisible(localClientNum, dc->contextIndex, item) )
++            continue;
++        const rectDef_s *rect = Window_GetRect(&item->window);
++        rectDef_s placed = *rect;
++        ScrPlace_ApplyRect(scrPlace, &placed.x, &placed.y, &placed.w, &placed.h, rect->horzAlign, rect->vertAlign);
++        if ( tx < placed.x || tx > placed.x + placed.w || ty < placed.y || ty > placed.y + placed.h )
++            continue;
++        if ( Window_HasFocus(dc->contextIndex, &item->window) )
++            return 0;
++        // x, y only matter to text items' own rect test, which uses the flat placement: none here
++        if ( Item_SetFocus(localClientNum, dc, item, -100000.0f, -100000.0f) )
++            return 1;
++    }
++    return 0;
++}
++#endif
++
+ void __cdecl Item_MouseEnter(int localClientNum, UiContext *dc, itemDef_s *item, float x, float y)
+ {
+     rectDef_s r; // [esp+8h] [ebp-24h] BYREF
+diff --git a/src/universal/assertive.h b/src/universal/assertive.h
+index a3f34cd..b80377a 100644
+--- a/src/universal/assertive.h
++++ b/src/universal/assertive.h
+@@ -60,11 +60,12 @@ bool Assert_MyHandler(const char *filename, int line, int type, const char *fmt,
+ #define nanassertvec3(vec) iassert( !IS_NAN((vec)[0]) && !IS_NAN((vec)[1]) && !IS_NAN((vec)[2]) )
+ #define alwaysfails 0
+ #else
+-#define iassert(expression)
+-#define vassert(expression, fmt, ...)
+-#define bcassert(expression, maxv)
+-#define bcassert2(expression, maxv)
+-#define rangeassert(expression, minv, maxv)
+-#define nanassertvec3(vec) 
++// variadic: decompiled callers pass extra arguments, which MSVC ignores and clang rejects
++#define iassert(...)
++#define vassert(...)
++#define bcassert(...)
++#define bcassert2(...)
++#define rangeassert(...)
++#define nanassertvec3(...) 
+ #define alwaysfails 0
+ #endif
+\ No newline at end of file
+diff --git a/src/universal/com_expressions_eval.cpp b/src/universal/com_expressions_eval.cpp
+index 2d0fdd6..f23a234 100644
+--- a/src/universal/com_expressions_eval.cpp
++++ b/src/universal/com_expressions_eval.cpp
+@@ -14140,7 +14140,7 @@ char __cdecl EvaluateExpression(
+         if ( type == 1 )
+         {
+             i->type = 2;
+-            i->data.cmd = rpnFunctions[Expression_GetFunctionForOp(i->data.cmdIdx)];
++            i->data.cmd = (void *)rpnFunctions[Expression_GetFunctionForOp(i->data.cmdIdx)];
+             ((void (__cdecl *)(const int, itemDef_s *, OperandStack *))i->data.cmd)(localClientNum, item, &dataStack);
+             continue;
+         }
+diff --git a/src/universal/memfile.cpp b/src/universal/memfile.cpp
+index 8a493a1..2f7b3b4 100644
+--- a/src/universal/memfile.cpp
++++ b/src/universal/memfile.cpp
+@@ -17,7 +17,7 @@ void __cdecl MemFile_CommonInit(
+     if ( !s_isLzoInitialized )
+     {
+         //__lzopro_lzo_init_v2(0x2020u, 2, 4, 4, 4, 4, 4, 4, 4, 24);
+-        lzo_init(0x2020u, 2, 4, 4, 4, 4, 4, 4, 4, 24);
++        lzo_init(); // MSVC ignored the extra arguments
+         s_isLzoInitialized = 1;
+     }
+     if ( !memFile
+diff --git a/src/universal/q_shared.cpp b/src/universal/q_shared.cpp
+index 905bb8d..d5ec935 100644
+--- a/src/universal/q_shared.cpp
++++ b/src/universal/q_shared.cpp
+@@ -5,6 +5,7 @@
+ #include <ctype.h>
+ #include <qcommon/common.h>
+ #include <stdarg.h>
++#include <setjmp.h>
+ #include <qcommon/threads.h>
+ #include <qcommon/cm_trace.h>
+ #include <gfx_d3d/r_model.h>
+@@ -23,7 +24,7 @@ struct va_info_t
+ 
+ va_info_t va_info[15];
+ TraceThreadInfo g_traceThreadInfo[15];
+-int g_com_error[15][16];
++jmp_buf g_com_error[15];
+ int valueindex;
+ 
+ // *WARNING* One or more selections were skipped as they could not be interpreted as c data
+diff --git a/src/universal/q_shared.h b/src/universal/q_shared.h
+index 8c94718..45a2536 100644
+--- a/src/universal/q_shared.h
++++ b/src/universal/q_shared.h
+@@ -10,6 +10,23 @@
+ // for windows fastcall option
+ #define	QDECL
+ 
++// angle indexes
++#define	PITCH				0		// up / down
++#define	YAW					1		// left / right
++#define	ROLL				2		// fall over
++
++#define ID_INLINE __inline 
++
++int __cdecl ShortSwap(__int16 l);
++int __cdecl LongSwap(int l);
++
++static ID_INLINE short BigShort(short l) { return (short)ShortSwap(l); }
++#define LittleShort
++static ID_INLINE int BigLong(int l) { return LongSwap(l); }
++#define LittleLong
++//static ID_INLINE float BigFloat(const float *l) { FloatSwap(l); }
++#define LittleFloat
++
+ #include <universal/dvar.h>
+ #include <universal/com_math.h>
+ #include <universal/assertive.h>
+@@ -41,22 +58,6 @@
+ #endif
+ #endif
+ 
+-// angle indexes
+-#define	PITCH				0		// up / down
+-#define	YAW					1		// left / right
+-#define	ROLL				2		// fall over
+-
+-#define ID_INLINE __inline 
+-
+-int __cdecl ShortSwap(__int16 l);
+-int __cdecl LongSwap(int l);
+-
+-static ID_INLINE short BigShort(short l) { return (short)ShortSwap(l); }
+-#define LittleShort
+-static ID_INLINE int BigLong(int l) { return LongSwap(l); }
+-#define LittleLong
+-//static ID_INLINE float BigFloat(const float *l) { FloatSwap(l); }
+-#define LittleFloat
+ 
+ #define	PATH_SEP '\\'
+ 
+diff --git a/src/win32/win_input.cpp b/src/win32/win_input.cpp
+index fe317f6..4e968fe 100644
+--- a/src/win32/win_input.cpp
++++ b/src/win32/win_input.cpp
+@@ -224,6 +224,17 @@ void __cdecl IN_Frame()
+             IN_DeactivateMouse();
+         }
+     }
++#ifdef BO1_GUEST
++    // the port (Quest): no window activation messages ever come, so in_appactive may never be set - the gamepad
++    // (the headset's controllers in game, a Bluetooth pad) is read every frame regardless
++    // (at most every 4 ms: IN_Frame also runs from the engine's waits, thousands of times a second)
++    static int bo1LastGamepadMs;
++    if ( !(s_wmv.mouseInitialized && in_appactive && IN_IsForegroundWindow()) && Sys_Milliseconds() - bo1LastGamepadMs >= 4 )
++    {
++        bo1LastGamepadMs = Sys_Milliseconds();
++        IN_GamepadsMove();
++    }
++#endif
+ }
+ 
+ void IN_GamepadsMove()
+diff --git a/src/win32/win_main.cpp b/src/win32/win_main.cpp
+index 57015f9..4873b5b 100644
+--- a/src/win32/win_main.cpp
++++ b/src/win32/win_main.cpp
+@@ -235,6 +235,7 @@ void __cdecl Sys_HeadlessLogAssert(const char *filename, int line, const char *m
+     Sys_HeadlessEmergencyLog("BO1_HEADLESS ASSERT: %s(%d): %s\n", filename, line, message);
+ }
+ 
++#ifndef BO1_GUEST
+ // headless: record where a crash happened, then let WER (no UI, see WinMain) write Application Error 1000 and end it
+ static LONG __stdcall Sys_HeadlessExceptionFilter(_EXCEPTION_POINTERS *info)
+ {
+@@ -508,6 +509,28 @@ static void Sys_HeadlessDumpThreads(int pass)
+     CloseHandle(snap);
+ }
+ 
++#else // BO1_GUEST: no x86 frames or PE image to walk; the Quest host reports crashes from its signal handler
++static LONG __stdcall Sys_HeadlessExceptionFilter(_EXCEPTION_POINTERS *)
++{
++    return EXCEPTION_CONTINUE_SEARCH;
++}
++
++static LPTOP_LEVEL_EXCEPTION_FILTER s_prevExceptionFilter;
++
++static LONG __stdcall Sys_LoggingExceptionFilter(_EXCEPTION_POINTERS *info)
++{
++    return s_prevExceptionFilter ? s_prevExceptionFilter(info) : EXCEPTION_CONTINUE_SEARCH;
++}
++
++static unsigned int s_threadDumpMs;
++static DWORD s_mainThreadId;
++
++static void Sys_HeadlessDumpThreads(int pass)
++{
++    Sys_HeadlessThreadLog("BO1_HEADLESS THREAD dump %d: not available on this platform\n", pass);
++}
++#endif
++
+ static DWORD __stdcall Sys_HeadlessThreadDumpThread(void *)
+ {
+     Sleep(s_threadDumpMs);
+@@ -742,6 +765,10 @@ static void Sys_HeadlessMenuDump()
+     }
+ }
+ 
++#ifdef BO1_GUEST
++void Sys_MenuDumpNow() { Sys_HeadlessMenuDump(); } // the port: listmenus runs it
++#endif
++
+ extern int g_bo1SceneBrushTotal, g_bo1SceneBrushDrawn; // r_dpvs.cpp (mapkit-fix-4a)
+ static void Sys_HeadlessShotsFrame(int elapsed)
+ {
+@@ -2176,6 +2203,7 @@ int __cdecl PrivateUnhandledExceptionFilter(_EXCEPTION_POINTERS *ExceptionInfo)
+         &g_ExceptionStr[strlen(g_ExceptionStr)],
+         "Exception Address: %08x\n\n",
+         ExceptionInfo->ExceptionRecord->ExceptionAddress);
++#ifndef BO1_GUEST // x86 registers and stack bytes
+     if ((ExceptionInfo->ContextRecord->ContextFlags & 0x10001) != 0)
+         sprintf(
+             &g_ExceptionStr[strlen(g_ExceptionStr)],
+@@ -2232,6 +2260,7 @@ int __cdecl PrivateUnhandledExceptionFilter(_EXCEPTION_POINTERS *ExceptionInfo)
+         }
+         strcat(g_ExceptionStr, "\n");
+     }
++#endif
+     v2 = Win_LocalizeRef("WIN_ERROR");
+     Com_Error(ERR_FATAL, v2);
+     return 1;
+diff --git a/src/win32/win_net.cpp b/src/win32/win_net.cpp
+index 95017ea..deb47a5 100644
+--- a/src/win32/win_net.cpp
++++ b/src/win32/win_net.cpp
+@@ -1027,7 +1027,7 @@ unsigned int __cdecl NET_TCPIPSocket(char *net_interface, int port, int type)
+         if ( net_interface && *net_interface && I_stricmp(net_interface, "localhost") )
+             Sys_StringToSockaddr(net_interface, (sockaddr *)&address);
+         else
+-            address.sin_addr.S_un.S_addr = 0;
++            address.sin_addr.s_addr = 0;
+         if ( port == -1 )
+             address.sin_port = 0;
+         else
+@@ -1072,10 +1072,10 @@ int __cdecl NET_Select(unsigned int socket)
+     fd_set writefds; // [esp+110h] [ebp-110h] BYREF
+     timeval time; // [esp+218h] [ebp-8h] BYREF
+ 
+-    readfds.fd_count = 1;
+-    readfds.fd_array[0] = socket;
+-    writefds.fd_count = 1;
+-    writefds.fd_array[0] = socket;
++    FD_ZERO(&readfds);
++    FD_SET(socket, &readfds);
++    FD_ZERO(&writefds);
++    FD_SET(socket, &writefds);
+     time.tv_sec = 5;
+     time.tv_usec = 0;
+     err = select(0, &readfds, &writefds, 0, &time);
+diff --git a/src/win32/win_shared.cpp b/src/win32/win_shared.cpp
+index d63a9f3..fd6ab08 100644
+--- a/src/win32/win_shared.cpp
++++ b/src/win32/win_shared.cpp
+@@ -33,6 +33,12 @@ unsigned int __cdecl Sys_MillisecondsRaw()
+ // https://github.com/id-Software/Quake-III-Arena/blob/master/code/win32/win_shared.c
+ void Sys_SnapVector(float *v)
+ {
++#ifdef BO1_GUEST
++    // FISTP rounds to nearest even, as lrintf does
++    v[0] = (float)lrintf(v[0]);
++    v[1] = (float)lrintf(v[1]);
++    v[2] = (float)lrintf(v[2]);
++#else
+     int i;
+     float f;
+ 
+@@ -50,4 +56,5 @@ void Sys_SnapVector(float *v)
+     __asm	fld		f;
+     __asm	fistp	i;
+     *v = i;
++#endif
+ }
+\ No newline at end of file
